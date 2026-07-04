@@ -1798,6 +1798,16 @@
     ],
     "package": "All"
   },
+  "Hyundai Palisade 2026 with HDA1": {
+    "platform": "HYUNDAI_PALISADE_HEV_LX3",
+    "make": "Hyundai",
+    "brand": "hyundai",
+    "model": "Palisade",
+    "year": [
+      "2026"
+    ],
+    "package": "All"
+  },
   "Hyundai Santa Cruz 2022-24": {
     "platform": "HYUNDAI_SANTA_CRUZ_1ST_GEN",
     "make": "Hyundai",

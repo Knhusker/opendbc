@@ -46,6 +46,10 @@ class CarInterface(CarInterfaceBase):
         # this needs to be figured out for cars without an ADAS ECU
         ret.alphaLongitudinalAvailable = False
 
+      # no longitudinal for all lka_steering angle steering
+      if lka_steering and ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
+        ret.alphaLongitudinalAvailable = False
+
       ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN]
 
       # Check if the car is hybrid. Only HEV/PHEV cars have 0xFA on E-CAN.
@@ -63,6 +67,8 @@ class CarInterface(CarInterfaceBase):
           ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
         if not ret.flags & HyundaiFlags.CANFD_RADAR_SCC:
           ret.flags |= HyundaiFlags.CANFD_CAMERA_SCC.value
+        if 0xCB in fingerprint[CAN.CAM]:  # LFA_ALT
+          ret.flags |= HyundaiFlags.SEND_LFA.value
 
       # Some LKA steering cars have alternative messages for gear checks
       # ICE cars do not have 0x130; GEARS message on 0x40 or 0x70 instead
@@ -85,6 +91,11 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ALT_BUTTONS.value
       if ret.flags & HyundaiFlags.CANFD_CAMERA_SCC:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
+      if ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
+        ret.steerControlType = structs.CarParams.SteerControlType.angle
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ANGLE_STEERING.value
+      if ret.flags & HyundaiFlags.CCNC and not ret.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CCNC.value
 
     else:
       # Shared configuration for non CAN-FD cars
@@ -117,7 +128,9 @@ class CarInterface(CarInterfaceBase):
     ret.centerToFront = ret.wheelbase * 0.4
     ret.steerActuatorDelay = 0.1
     ret.steerLimitTimer = 0.4
-    CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+
+    if not (ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING):
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     if ret.flags & HyundaiFlags.ALT_LIMITS:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_LIMITS.value
@@ -215,7 +228,8 @@ class CarInterface(CarInterfaceBase):
       if 0x53E in fingerprint[2]:
         ret.flags |= HyundaiFlagsSP.HAS_LKAS12.value
 
-    ret.intelligentCruiseButtonManagementAvailable = not (stock_cp.flags & HyundaiFlags.CANFD_ALT_BUTTONS)
+    # alt-button CAN-FD cars supported via CRUISE_BUTTONS_ALT (create_buttons_alt)
+    ret.intelligentCruiseButtonManagementAvailable = True
 
     return ret
 

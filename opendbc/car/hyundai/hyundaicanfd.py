@@ -1,7 +1,8 @@
 import numpy as np
 from opendbc.car import CanBusBase
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.crc import CRC16_XMODEM
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import HyundaiFlags, ActvACISta, ESA_ActvSta
 from opendbc.sunnypilot.car.hyundai.lead_data_ext import CanFdLeadData
 
 
@@ -35,18 +36,48 @@ class CanBus(CanBusBase):
   def CAM(self):
     return self._cam
 
-
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon):
+# kcn
+# def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon, steering_angle=0.0):
   values = {
     "LKA_OptUsmSta": 2,
-    "LKA_SysIndReq": lkas_icon,
+    "LKA_SysIndReq": 2 if enabled else 1,
     "StrTqReqVal": apply_torque,
     "LKA_SysWrn": 0,
     "ActToiSta": 1 if lat_active else 0,
     "LKA_UsmMod": 0,  # hide LKAS settings
-    "LKA_RcgSta": 0,
+    "LKA_RcgSta": 0,  # lane recognition status (0 for "not recognized")
     "Damping_Gain": 100,  # can potentially tuned for better perf [3, 200]
   }
+
+  # Angle control doesn't support using LFA yet
+# kcn -- Lane centering button was immediately causing a red screen error
+  if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
+    values |= {
+      "LKA_OptUsmSta": 0,
+      "LKA_SysIndReq": 2 if lat_active else 1,  # kcn -- added
+      "StrTqReqVal": 0,
+      "ActToiSta": 0,
+#     "LKA_RcgSta": 3 if lat_active else 0,
+      "LKA_RcgSta": 0,  # kcn - stock camera always sends 0, MDPS faults on 3
+#     "ADAS_StrAnglReqVal": apply_angle,
+      "ADAS_StrAnglReqVal": apply_angle if lat_active else steering_angle, # kcn
+#     "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+      "LKAS_ANGLE_ACTIVE": 1,   # kcn
+      "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
+    }
+
+  LFA_ALT_values = {}
+  if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING and CP.flags & HyundaiFlags.SEND_LFA:
+    ActvACILvl2Sta = ActvACISta.ACTIVE35_ACTIVE if lat_active else ActvACISta.INACTIVE if enabled else ActvACISta.INACTIVE
+    LFA_ALT_values = {
+      "ADAS_ActvACISta": ActvACISta.INIT.value,
+      "ADAS_ActvACILvl2Sta": ActvACILvl2Sta.value,
+      "ADAS_StrAnglReqVal": apply_angle,
+      "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
+      "FCA_ESA_ActvSta": ESA_ActvSta.INACTIVE.value,
+      "FCA_ESA_TqBstGainVal": 0
+    }
 
   ret = []
   if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
@@ -54,6 +85,21 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     if CP.openpilotLongitudinalControl:
       ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
     ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
+# kcn
+#  elif CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING and CP.flags & HyundaiFlags.SEND_LFA:
+#    # For cars with an HDA1 and LFA2, we send LFA messages to the ADAS ECU.
+#    ret.append(packer.make_can_msg("LFA_ALT", CAN.ECAN, LFA_ALT_values))
+#  else:
+#    ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
+  elif CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING and CP.flags & HyundaiFlags.SEND_LFA:
+    # For cars with an HDA1 and LFA2, we send LFA messages to the ADAS ECU.
+    ret.append(packer.make_can_msg("LFA_ALT", CAN.ECAN, LFA_ALT_values))
+  elif CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
+# Angle steering cars without SEND_LFA or CANFD_LKA_STEER_MSG send LKAS_ALT to ACAN
+# kcn    ret.append(packer.make_can_msg("LKAS_ALT", CAN.ACAN, values))
+# Only inject LKAS_ALT when actively steering - let camera passthrough when not active
+    if lat_active:
+      ret.append(packer.make_can_msg("LKAS_ALT", CAN.ACAN, values))  #kcn
   else:
     ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
 
@@ -74,16 +120,50 @@ def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt):
 
 
 def create_buttons(packer, CP, CAN, cnt, btn):
+  # Constant fields must match the car's real CRUISE_BUTTONS_ALT frame exactly or the
+  # ECU mis-validates and misreads the button (caused set-speed runaway). Verified from
+  # real idle: DISTANCE_UNIT=1 (byte3=0x40), SET_ME_2=7 (byte5=0x70), BYTE9-11=0x80/0x87/0x07.
   values = {
     "COUNTER": cnt,
-    "SET_ME_1": 1,
+    "DISTANCE_UNIT": 1,
+    "SET_ME_2": 7,
     "CRUISE_BUTTONS": btn,
+    "BYTE9": 0x80,
+    "BYTE10": 0x87,
+    "BYTE11": 0x07,
   }
 
   bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG else CAN.CAM
   return packer.make_can_msg("CRUISE_BUTTONS", bus, values)
 
 
+def create_buttons_alt(packer, CP, CAN, cnt, btn):
+  # CRUISE_BUTTONS_ALT (0x1aa) for alt-button CAN-FD cars.
+  # CHECKSUM auto-computed by packer. CRUISE_BUTTONS uses standard
+  # Buttons enum (RES_ACCEL=1, SET_DECEL=2), confirmed via rlog.
+  # Constant fields must match the car's real CRUISE_BUTTONS_ALT frame exactly or the
+  # ECU mis-validates and misreads the button (caused set-speed runaway). Verified from
+  # real idle: DISTANCE_UNIT=1 (byte3=0x40), SET_ME_2=7 (byte5=0x70), BYTE9-11=0x80/0x87/0x07.
+  values = {
+    "COUNTER": cnt,
+    "DISTANCE_UNIT": 1,
+    "SET_ME_2": 7,
+    "CRUISE_BUTTONS": btn,
+    "BYTE9": 0x80,
+    "BYTE10": 0x87,
+    "BYTE11": 0x07,
+  }
+  bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG else CAN.CAM
+  return packer.make_can_msg("CRUISE_BUTTONS_ALT", bus, values)
+ 
+  
+  # kcn - bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG else CAN.CAM
+  bus = CAN.ECAN if (CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG or CP.flags & HyundaiFlags.CCNC) else CAN.CAM
+  return packer.make_can_msg("CRUISE_BUTTONS_ALT", bus, values)
+  
+  
+  
+  
 def create_acc_cancel(packer, CP, CAN, cruise_info_copy):
   # CAN FD camera-based SCC requires additional signals to be preserved
   # verbatim from the previous SCC_CONTROL frame to avoid checksum or
@@ -125,8 +205,110 @@ def create_lfahda_cluster(packer, CAN, enabled, lfa_icon):
   return packer.make_can_msg("LFAHDA_CLUSTER", CAN.ECAN, values)
 
 
+def create_ccnc(packer, CAN, openpilotLongitudinalControl, enabled, hud, leftBlinker, rightBlinker, msg_161, msg_162, msg_1b5,
+                is_metric, out, main_cruise_enabled, lfa_icon):
+  # kcn - guard against empty dicts on first frame before CCNC messages are populated
+  if not msg_161 or not msg_162 or not msg_1b5:
+    return []
+
+  for f in {"FAULT_LSS", "FAULT_HDA", "FAULT_DAS", "FAULT_LFA", "FAULT_DAW", "FAULT_ESS"}:
+    msg_162[f] = 0
+  if msg_161["ALERTS_2"] == 5:
+    msg_161.update({"ALERTS_2": 0, "SOUNDS_2": 0})
+  if msg_161["ALERTS_3"] == 17:
+    msg_161["ALERTS_3"] = 0
+  if msg_161["ALERTS_5"] in (2, 5):
+    msg_161["ALERTS_5"] = 0
+  if msg_161["SOUNDS_4"] == 2 and msg_161["LFA_ICON"] in (3, 0,):
+    msg_161["SOUNDS_4"] = 0
+
+  LANE_CHANGE_SPEED_MIN = 8.9408
+  anyBlinker = leftBlinker or rightBlinker
+  curvature = {i: (31 if i == -1 else 13 - abs(i + 15)) if i < 0 else 15 + i for i in range(-15, 16)}
+
+  msg_161.update({
+    "DAW_ICON": 0,
+    "LKA_ICON": 0,
+    "LFA_ICON": 2 if lfa_icon else 0,
+    "CENTERLINE": 1 if lfa_icon else 0,
+    "LANELINE_CURVATURE": curvature.get(max(-15, min(int(out.steeringAngleDeg / 4.5), 15)), 14) if lfa_icon and not anyBlinker else 15,
+    "LANELINE_LEFT": (0 if not lfa_icon else 1 if not hud.leftLaneVisible else 4 if hud.leftLaneDepart else 6 if anyBlinker else 2),
+    "LANELINE_RIGHT": (0 if not lfa_icon else 1 if not hud.rightLaneVisible else 4 if hud.rightLaneDepart else 6 if anyBlinker else 2),
+    "LCA_LEFT_ICON": (0 if not lfa_icon or out.vEgo < LANE_CHANGE_SPEED_MIN else 1 if out.leftBlindspot else 2 if anyBlinker else 4),
+    "LCA_RIGHT_ICON": (0 if not lfa_icon or out.vEgo < LANE_CHANGE_SPEED_MIN else 1 if out.rightBlindspot else 2 if anyBlinker else 4),
+    "LCA_LEFT_ARROW": 2 if leftBlinker else 0,
+    "LCA_RIGHT_ARROW": 2 if rightBlinker else 0,
+  })
+
+  if lfa_icon and (leftBlinker or rightBlinker):
+    leftlaneraw, rightlaneraw = msg_1b5["Info_LftLnPosVal"], msg_1b5["Info_RtLnPosVal"]
+
+    scale_per_m = 15 / 1.7
+    leftlane = abs(int(round(15 + (leftlaneraw - 1.7) * scale_per_m)))
+    rightlane = abs(int(round(15 + (rightlaneraw - 1.7) * scale_per_m)))
+
+    if msg_1b5["Info_LftLnQualSta"] not in (2, 3):
+      leftlane = 0
+    if msg_1b5["Info_RtLnQualSta"] not in (2, 3):
+      rightlane = 0
+
+    if leftlaneraw == -2.0248375:
+      leftlane = 30 - rightlane
+    if rightlaneraw == 2.0248375:
+      rightlane = 30 - leftlane
+
+    if leftlaneraw == rightlaneraw == 0:
+      leftlane = rightlane = 15
+    elif leftlaneraw == 0:
+      leftlane = 30 - rightlane
+    elif rightlaneraw == 0:
+      rightlane = 30 - leftlane
+
+    total = leftlane + rightlane
+    if total == 0:
+      leftlane = rightlane = 15
+    else:
+      leftlane = round((leftlane / total) * 30)
+      rightlane = 30 - leftlane
+
+    msg_161["LANELINE_LEFT_POSITION"] = leftlane
+    msg_161["LANELINE_RIGHT_POSITION"] = rightlane
+
+  if hud.leftLaneDepart or hud.rightLaneDepart:
+    msg_162["VIBRATE"] = 1
+
+  if openpilotLongitudinalControl:
+    if msg_161["ALERTS_3"] in (1, 2, 3, 4, 7, 8, 9, 10):
+      msg_161["ALERTS_3"] = 0
+    if msg_161["ALERTS_5"] == 4:
+      msg_161["ALERTS_5"] = 0
+    if msg_161["SOUNDS_3"] == 5:
+      msg_161["SOUNDS_3"] = 0
+
+    msg_161.update({
+      "SETSPEED": 3 if enabled else 1,
+      "SETSPEED_HUD": 0 if not main_cruise_enabled else 2 if enabled else 1,
+      "SETSPEED_SPEED": (
+        255 if not main_cruise_enabled else
+        (40 if is_metric else 25) if (s := round(out.vCruiseCluster * (1 if is_metric else CV.KPH_TO_MPH))) > (145 if is_metric else 90) else s
+      ),
+      "DISTANCE": hud.leadDistanceBars,
+      "DISTANCE_SPACING": 0 if not main_cruise_enabled else 1 if enabled else 3,
+      "DISTANCE_LEAD": 0 if not main_cruise_enabled else 2 if enabled and hud.leadVisible else 1 if hud.leadVisible else 0,
+      "DISTANCE_CAR": 0 if not main_cruise_enabled else 2 if enabled else 1,
+      "SLA_ICON": 0,
+      "NAV_ICON": 0,
+      "TARGET": 0,
+    })
+
+    msg_162["LEAD"] = 0 if not main_cruise_enabled else 2 if enabled else 1
+    msg_162["LEAD_DISTANCE"] = msg_1b5["Longitudinal_Distance"]
+
+  return [packer.make_can_msg(msg, CAN.ECAN, data) for msg, data in [("CCNC_0x161", msg_161), ("CCNC_0x162", msg_162)]]
+
+
 def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control,
-                       lead_data: CanFdLeadData, main_cruise_enabled, tuning):
+                       lead_data: CanFdLeadData, main_cruise_enabled, tuning, cruise_info=None):
   jerk = 5
   jn = jerk / 50
   if not enabled or gas_override:
@@ -154,6 +336,8 @@ def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_ov
     "SET_ME_TMP_64": 0x64,
     "DISTANCE_SETTING": hud_control.leadDistanceBars,
   }
+  if cruise_info:
+    values.update({s: cruise_info[s] for s in ["ACC_ObjDist", "ACC_ObjRelSpd"]})
 
   return packer.make_can_msg("SCC_CONTROL", CAN.ECAN, values)
 
