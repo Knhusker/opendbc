@@ -1,9 +1,10 @@
+
 import re
 from dataclasses import dataclass, field
 from enum import IntFlag, Enum
 
 from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds, ACCELERATION_DUE_TO_GRAVITY
-from opendbc.car.lateral import AngleSteeringLimits, ISO_LATERAL_ACCEL
+from opendbc.car.lateral import AngleSteeringLimitsVM, ISO_LATERAL_ACCEL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarHarness, CarDocs, CarParts, SupportType
@@ -21,21 +22,19 @@ class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s
   ACCEL_MAX = 2.0 # m/s
 
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+  ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
     # Steering angle limits based on observed stock ADAS behavior:
     # - LKAS max requested angle is 176.7°, but no fault occurs if higher values are requested.
     # - LFA max stock value is 119.9°.
     # The ADAS ECU clamps LKAS commands above 176.7° down to 176.7°,
     # and clamps LFA commands above 119.9° down to 119.9°.
     360,  # degrees (safe upper bound for command, allowing some margin)
-    # HKG uses a vehicle model instead, check carcontroller.py for details
-    ([], []),
-    ([], []),
+    # HKG uses a vehicle model instead, check carcontroller.py for details  
     MAX_LATERAL_ACCEL=(ISO_LATERAL_ACCEL + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^2
-    MAX_LATERAL_JERK=(3.0 + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^3,
+    MAX_LATERAL_JERK=(3.0 + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^3
     MAX_ANGLE_RATE=5  # comfort rate limit for angle commands, in degrees per frame.
   )
-
+    
   # More torque optimization
   # The torque is calculated based on the curvature of the road and the speed of the car and it's a percentage of the maximum torque.
   SMOOTHING_ANGLE_VEGO_MATRIX = [0, 8.5, 11, 13.8, 18]
