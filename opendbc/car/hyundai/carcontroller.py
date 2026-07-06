@@ -34,9 +34,9 @@ def get_baseline_safety_cp():
   from opendbc.car.hyundai.interface import CarInterface
   return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
 
-# kcn -- Add angle_steering as input
-def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain, angle_steering=False):
-
+# kcn -- Add angle_steering and blinker_active as input
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain, angle_steering=False, blinker_active=False):
+ 
 # kcn -- move the "not" case first
   if not lat_active:
     target = 0.0
@@ -48,14 +48,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
       bp1 = np.interp(v_ego, [2, 11], [75, 125])
       bp2 = np.interp(v_ego, [2, 11], [125, 150])
       bp3 = np.interp(v_ego, [2, 11], [175, 275])
-      bp4 = np.interp(v_ego, [2, 22], [400, 700])
+      bp4 = np.interp(v_ego, [2, 22], [400, 700]) 
+    elif blinker_active:
+      # kcn - lane change nudge: minimal resistance, similar to no Comma, and extend speed range to ~80 mph
+      floor = np.interp(v_ego, [2, 25], [0.02, 0.04])
+      bp1 = np.interp(v_ego, [2, 35], [30, 50])
+      bp2 = np.interp(v_ego, [2, 35], [50, 70])
+      bp3 = np.interp(v_ego, [2, 35], [70, 90])
+      bp4 = np.interp(v_ego, [2, 35], [90, 120])
     else:
-    #kcn -- too much force is required to move the car within the lane 
+      #kcn - reduce required to move the Palisade LX3 within the lane, and extend speed range to ~80 mph
       floor = np.interp(v_ego, [2, 25], [0.1, 0.12])
       bp1 = np.interp(v_ego, [2, 25], [60, 150])
       bp2 = np.interp(v_ego, [2, 25], [120, 250])
-      bp3 = np.interp(v_ego, [2, 25], [160, 350])
-      bp4 = np.interp(v_ego, [2, 25], [350, 400])
+      bp3 = np.interp(v_ego, [2, 35], [160, 300])
+      bp4 = np.interp(v_ego, [2, 35], [200, 350])
            
     target = np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4], [ceiling, shelf, shelf, floor])
   
@@ -148,8 +155,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                                          self.angle_limit_counter, MAX_ANGLE_FRAMES,
                                                                          MAX_ANGLE_CONSECUTIVE_FRAMES)
       new_torque = int(round(actuators.torque * self.params.STEER_MAX))
-      apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
-
+      # kcn  apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
+      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive, self.apply_torque_last, 
+                                              self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING, CC.leftBlinker or CC.rightBlinker)
     # angle control
     else:
       apply_steer_req = False  # kcn - initialize before conditional assignment
