@@ -43,26 +43,28 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   else:
     ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
     shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
+        
     if not angle_steering:
+      # Palisade uses angle steering -- keep original values
       floor = np.interp(v_ego, [2, 22], [0.1, 0.3])
       bp1 = np.interp(v_ego, [2, 11], [75, 125])
       bp2 = np.interp(v_ego, [2, 11], [125, 150])
       bp3 = np.interp(v_ego, [2, 11], [175, 275])
       bp4 = np.interp(v_ego, [2, 22], [400, 700]) 
     elif blinker_active:
-      # kcn - lane change nudge: minimal resistance, similar to no Comma, and extend speed range to ~80 mph
+      # Lane change nudge: minimal resistance, and extend speed range to ~80 mph
       floor = np.interp(v_ego, [2, 25], [0.02, 0.04])
-      bp1 = np.interp(v_ego, [2, 35], [30, 50])
-      bp2 = np.interp(v_ego, [2, 35], [50, 70])
-      bp3 = np.interp(v_ego, [2, 35], [70, 90])
-      bp4 = np.interp(v_ego, [2, 35], [90, 120])
+      bp1 = np.interp(v_ego, [2, 35], [40, 60])
+      bp2 = np.interp(v_ego, [2, 35], [75, 90])
+      bp3 = np.interp(v_ego, [2, 35], [100, 150])
+      bp4 = np.interp(v_ego, [2, 35], [150, 200])
     else:
-      #kcn - reduce required to move the Palisade LX3 within the lane, and extend speed range to ~80 mph
-      floor = np.interp(v_ego, [2, 25], [0.1, 0.12])
-      bp1 = np.interp(v_ego, [2, 25], [60, 150])
-      bp2 = np.interp(v_ego, [2, 25], [120, 250])
-      bp3 = np.interp(v_ego, [2, 35], [160, 300])
-      bp4 = np.interp(v_ego, [2, 35], [200, 350])
+      # reduce effort required to move the car within the lane, and extend speed range to ~80 mph
+      floor = np.interp(v_ego, [2, 35], [0.05, 0.10])
+      bp1 = np.interp(v_ego, [2, 35], [75, 125])
+      bp2 = np.interp(v_ego, [2, 35], [125, 150])
+      bp3 = np.interp(v_ego, [2, 35], [150, 225])
+      bp4 = np.interp(v_ego, [2, 35], [225, 300])
            
     target = np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4], [ceiling, shelf, shelf, floor])
   
