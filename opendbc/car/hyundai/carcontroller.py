@@ -45,26 +45,26 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
     shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
         
     if not angle_steering:
-      # Palisade uses angle steering -- keep original values
+      # Palisade uses angle steering -- keep original values for other cars
       floor = np.interp(v_ego, [2, 22], [0.1, 0.3])
       bp1 = np.interp(v_ego, [2, 11], [75, 125])
       bp2 = np.interp(v_ego, [2, 11], [125, 150])
       bp3 = np.interp(v_ego, [2, 11], [175, 275])
       bp4 = np.interp(v_ego, [2, 22], [400, 700]) 
     elif blinker_active:
-      # Lane change nudge: minimal resistance, and extend speed range to ~80 mph
+      # KCN - Lane change nudge: minimal resistance, and extend speed range to ~80 mph
       floor = np.interp(v_ego, [2, 25], [0.02, 0.04])
       bp1 = np.interp(v_ego, [2, 35], [40, 60])
       bp2 = np.interp(v_ego, [2, 35], [75, 90])
       bp3 = np.interp(v_ego, [2, 35], [100, 150])
       bp4 = np.interp(v_ego, [2, 35], [150, 200])
     else:
-      # reduce effort required to move the car within the lane, and extend speed range to ~80 mph
-      floor = np.interp(v_ego, [2, 35], [0.05, 0.10])
-      bp1 = np.interp(v_ego, [2, 35], [75, 125])
-      bp2 = np.interp(v_ego, [2, 35], [125, 150])
-      bp3 = np.interp(v_ego, [2, 35], [150, 225])
-      bp4 = np.interp(v_ego, [2, 35], [225, 300])
+      # KCN - reduce effort required to move the car within the lane, and extend speed range to ~80 mph
+      floor = np.interp(v_ego, [2, 35], [0.05, 0.07])
+      bp1 = np.interp(v_ego, [2, 35], [75, 100])
+      bp2 = np.interp(v_ego, [2, 35], [100, 125])
+      bp3 = np.interp(v_ego, [2, 35], [125, 175])
+      bp4 = np.interp(v_ego, [2, 35], [175, 250])
            
     target = np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4], [ceiling, shelf, shelf, floor])
   
@@ -139,6 +139,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_angle_last = 0
     # kcn
     self.prev_lat_active = False
+    self.lat_reengagement_frames = 0  # kcn - re-engagement ramp counter
 
   def update(self, CC, CC_SP, CS, now_nanos):
   
@@ -182,13 +183,39 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,     self.apply_torque_last, bool(self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING))  
   
       apply_steer_req = CC.latActive and apply_torque != 0
+      
+# kcn - Tighter curves at highway speed were giving warning then steering was stopped
+#       requiring immediate intervention.
+#       On re-engagement, ramp slowly from actual angle to prevent ACI fault cascade
 
+
+      if CC.latActive and not self.prev_lat_active:
+        self.lat_reengagement_frames = 20
+        apply_angle = CS.out.steeringAngleDeg
+        apply_steer_req = False
+      elif CC.latActive and (self.lat_reengagement_frames > 0 or (apply_angle is not None and abs(apply_angle - CS.out.steeringAngleDeg) > 2.0)):
+        # kcn - keep gap-limiting active as long as gap > 2° regardless of frame count
+        actual = CS.out.steeringAngleDeg
+        model_target = apply_angle
+        max_gap = 2.0
+        if abs(actual) < abs(self.apply_angle_last):
+          apply_angle = float(actual)
+        else:
+          apply_angle = float(np.clip(model_target, actual - max_gap, actual + max_gap))
+        if self.lat_reengagement_frames > 0:
+          self.lat_reengagement_frames -= 1
+        gap = abs(model_target - actual)
+        if gap < 1.0 and abs(actual - self.apply_angle_last) < 0.5:
+          self.lat_reengagement_frames = 0
+         
+
+
+         
       # Failsafe if we detected we'd violate safety
       if apply_angle is None:
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
-
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle
 
