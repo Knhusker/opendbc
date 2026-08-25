@@ -33,6 +33,7 @@ class CarControllerParams:
     MAX_LATERAL_ACCEL=(ISO_LATERAL_ACCEL + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^2
     MAX_LATERAL_JERK=(3.0 + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^3
     MAX_ANGLE_RATE=5  # comfort rate limit for angle commands, in degrees per frame.
+
   )
     
   # More torque optimization
@@ -59,8 +60,8 @@ class CarControllerParams:
       self.STEER_DELTA_DOWN = 3
 
     if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-      self.STEER_THRESHOLD = 175 # kcn -- change from 175 to reduce effort to start lane change
-	                             # kcn -- rolled back to test steering assistance temporarily unavailable
+      self.STEER_THRESHOLD = 100 # kcn -- change from 175 to reduce effort to start lane change
+	                             # kcn -- rolled back to test steering assistance temporarily
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
