@@ -140,6 +140,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # kcn
     self.prev_lat_active = False
     self.lat_reengagement_frames = 0  # kcn - re-engagement ramp counter
+    self.had_steer_fault = False  # kcn - track if MDPS fault occurred
 
   def update(self, CC, CC_SP, CS, now_nanos):
   
@@ -165,6 +166,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       apply_steer_req = False  # kcn - initialize before conditional assignment
       apply_torque = 0  # kcn - initialize before conditional assignment
+      if CS.out.steerFaultTemporary:
+        self.had_steer_fault = True
     
       v_ego_raw = CS.out.vEgoRaw
       desired_angle = float(np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
@@ -184,6 +187,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
   
       apply_steer_req = CC.latActive and apply_torque != 0
       
+      # Also reset when steering angle is near straight
+      if abs(CS.out.steeringAngleDeg) < 5.0:
+        self.had_steer_fault = False
+      
 # kcn - Tighter curves at highway speed were giving warning then steering was stopped
 #       requiring immediate intervention.
 #       On re-engagement, ramp slowly from actual angle to prevent ACI fault cascade
@@ -191,9 +198,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       if CC.latActive and not self.prev_lat_active:
         self.lat_reengagement_frames = 20
+        self.had_steer_fault = False  # kcn - clear fault history on re-engagement
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
-      elif CC.latActive and (self.lat_reengagement_frames > 0 or (apply_angle is not None and abs(apply_angle - CS.out.steeringAngleDeg) > 2.0)):
+          
+      elif CC.latActive and (self.lat_reengagement_frames > 0 or (self.had_steer_fault and apply_angle is not None and abs(apply_angle - CS.out.steeringAngleDeg) > 2.0)):
+             
         # kcn - keep gap-limiting active as long as gap > 2° regardless of frame count
         actual = CS.out.steeringAngleDeg
         model_target = apply_angle
@@ -207,6 +217,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         gap = abs(model_target - actual)
         if gap < 1.0 and abs(actual - self.apply_angle_last) < 0.5:
           self.lat_reengagement_frames = 0
+          self.had_steer_fault = False  # kcn - clear when gap resolved
          
 
 
